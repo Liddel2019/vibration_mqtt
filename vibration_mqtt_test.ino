@@ -13,7 +13,7 @@ const char* mqttUser = "<Your MQTT Username Here>";
 const char* mqttPassword = "<Your MQTT Password Here>";
 
 unsigned long previousMillis = 0; // Хранит время последней отправки данных
-const long interval = 2000; // Интервал между отправками данных в миллисекундах (например, 2000 мс = 2 секунды)
+const long interval = 1250; // Интервал между отправками данных в миллисекундах (например, 2000 мс = 2 секунды)
 int connectionAttempts = 0;
 
 WiFiClient espClient;
@@ -28,6 +28,15 @@ struct SensorData {
   long count;
 } sensorData;
 
+void blinkLed(int count) {
+  for (int i = 0; i < count; i++) {
+    digitalWrite(ledPin, HIGH);
+    delay(100);
+    digitalWrite(ledPin, LOW);
+    delay(100);
+  }
+}
+
 void resetSensorData() {
   sensorData = {INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN,
                 INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN,
@@ -38,29 +47,36 @@ void publishSensorData() {
   if (sensorData.count == 0) return; // Проверяем, есть ли данные для отправки
   
   // Отправляем данные акселерометра и гироскопа в отдельные топики
-  client.publish("sensor/Ax/min", String(sensorData.axMin).c_str());
-  client.publish("sensor/Ax/max", String(sensorData.axMax).c_str());
-  client.publish("sensor/Ax/avg", String(sensorData.axSum / sensorData.count).c_str());
+  client.publish("TEST/sensor/Ax/min", String(sensorData.axMin).c_str());
+  client.publish("TEST/sensor/Ax/max", String(sensorData.axMax).c_str());
+  client.publish("TEST/sensor/Ax/avg", String(sensorData.axSum / sensorData.count).c_str());
 
-  client.publish("sensor/Ay/min", String(sensorData.ayMin).c_str());
-  client.publish("sensor/Ay/max", String(sensorData.ayMax).c_str());
-  client.publish("sensor/Ay/avg", String(sensorData.aySum / sensorData.count).c_str());
+  client.publish("TEST/sensor/Ay/min", String(sensorData.ayMin).c_str());
+  client.publish("TEST/sensor/Ay/max", String(sensorData.ayMax).c_str());
+  client.publish("TEST/sensor/Ay/avg", String(sensorData.aySum / sensorData.count).c_str());
 
-  client.publish("sensor/Az/min", String(sensorData.azMin).c_str());
-  client.publish("sensor/Az/max", String(sensorData.azMax).c_str());
-  client.publish("sensor/Az/avg", String(sensorData.azSum / sensorData.count).c_str());
+  client.publish("TEST/sensor/Az/min", String(sensorData.azMin).c_str());
+  client.publish("TEST/sensor/Az/max", String(sensorData.azMax).c_str());
+  client.publish("TEST/sensor/Az/avg", String(sensorData.azSum / sensorData.count).c_str());
 
-  client.publish("sensor/Gx/min", String(sensorData.gxMin).c_str());
-  client.publish("sensor/Gx/max", String(sensorData.gxMax).c_str());
-  client.publish("sensor/Gx/avg", String(sensorData.gxSum / sensorData.count).c_str());
+  client.publish("TEST/sensor/Gx/min", String(sensorData.gxMin).c_str());
+  client.publish("TEST/sensor/Gx/max", String(sensorData.gxMax).c_str());
+  client.publish("TEST/sensor/Gx/avg", String(sensorData.gxSum / sensorData.count).c_str());
 
-  client.publish("sensor/Gy/min", String(sensorData.gyMin).c_str());
-  client.publish("sensor/Gy/max", String(sensorData.gyMax).c_str());
-  client.publish("sensor/Gy/avg", String(sensorData.gySum / sensorData.count).c_str());
+  client.publish("TEST/sensor/Gy/min", String(sensorData.gyMin).c_str());
+  client.publish("TEST/sensor/Gy/max", String(sensorData.gyMax).c_str());
+  client.publish("TEST/sensor/Gy/avg", String(sensorData.gySum / sensorData.count).c_str());
 
-  client.publish("sensor/Gz/min", String(sensorData.gzMin).c_str());
-  client.publish("sensor/Gz/max", String(sensorData.gzMax).c_str());
-  client.publish("sensor/Gz/avg", String(sensorData.gzSum / sensorData.count).c_str());
+  client.publish("TEST/sensor/Gz/min", String(sensorData.gzMin).c_str());
+  client.publish("TEST/sensor/Gz/max", String(sensorData.gzMax).c_str());
+  client.publish("TEST/sensor/Gz/avg", String(sensorData.gzSum / sensorData.count).c_str());
+
+  client.publish("TEST/sensor/Ax/diff", String(sensorData.axMax - sensorData.axMin).c_str());
+  client.publish("TEST/sensor/Ay/diff", String(sensorData.ayMax - sensorData.ayMin).c_str());
+  client.publish("TEST/sensor/Az/diff", String(sensorData.azMax - sensorData.azMin).c_str());
+  client.publish("TEST/sensor/Gx/diff", String(sensorData.gxMax - sensorData.gxMin).c_str());
+  client.publish("TEST/sensor/Gy/diff", String(sensorData.gyMax - sensorData.gyMin).c_str());
+  client.publish("TEST/sensor/Gz/diff", String(sensorData.gzMax - sensorData.gzMin).c_str());
 }
 
 int getSignalQuality(long rssi) {
@@ -158,7 +174,7 @@ void setAccelRange(int range) {
       Serial.println("Accel range set to ±8g");
       break;
     case 4:
-      mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
+      mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_4);
       Serial.println("Accel range set to ±4g");
       break;
     case 2:
@@ -215,25 +231,63 @@ void publishWiFiInfo() {
   String mac = WiFi.macAddress();
 
   // Отправляем информацию о силе сигнала
-  client.publish("wifi/RSSI", String(rssi).c_str());
-  client.publish("wifi/SignalQuality", String(quality).c_str());
+  client.publish("TEST/wifi/RSSI", String(rssi).c_str());
+  client.publish("TEST/wifi/SignalQuality", String(quality).c_str());
 
   // Отправляем информацию о сети
-  client.publish("wifi/IP", ip.c_str());
-  client.publish("wifi/SSID", ssid.c_str());
-  client.publish("wifi/BSSID", bssid.c_str());
-  client.publish("wifi/Channel", String(channel).c_str());
+  client.publish("TEST/wifi/IP", ip.c_str());
+  client.publish("TEST/wifi/SSID", ssid.c_str());
+  client.publish("TEST/wifi/BSSID", bssid.c_str());
+  client.publish("TEST/wifi/Channel", String(channel).c_str());
 
   // Отправляем информацию о устройстве
-  client.publish("wifi/MAC", mac.c_str());
+  client.publish("TEST/wifi/MAC", mac.c_str());
 
   Serial.println("WiFi info sent to MQTT.");
+}
+
+void reconnectWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected. Attempting to reconnect...");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    connectionAttempts = 0; // Сброс счетчика попыток подключения
+    while (WiFi.status() != WL_CONNECTED && connectionAttempts < 20) {
+      delay(500);
+      Serial.print(".");
+      connectionAttempts++;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nReconnected to WiFi");
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("\nFailed to reconnect to WiFi. Check your credentials or WiFi signal");
+    }
+  }
+}
+
+void reconnectMQTT() {
+  // Проверяем, подключены ли мы к MQTT
+  if (!client.connected()) {
+    Serial.println("Attempting MQTT reconnection...");
+    // Пытаемся подключиться
+    if (client.connect("ESP32Client", mqttUser, mqttPassword)) {
+      Serial.println("Reconnected to MQTT");
+      // Здесь можно также повторно подписаться на нужные топики
+    } else {
+      Serial.print("Failed to reconnect to MQTT, state: ");
+      Serial.println(client.state());
+      // Можно добавить задержку перед следующей попыткой
+    }
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   // Настройка WiFi
   setAccelRange(2); //2,4,8,16
+  blinkLed(3);
   connectToWiFi();
   // Настройка клиента MQTT
   client.setServer(mqttServer, mqttPort);
@@ -263,18 +317,21 @@ void setup() {
   calibrateSensor();
 
   resetSensorData();
+  blinkLed(10);
 }
 
 void loop() {
-   unsigned long currentMillis = millis();
+   
+   reconnectWiFi(); 
 
+   unsigned long currentMillis = millis();
   if (client.connected()) {
     if (currentMillis - previousMillis >= interval) {
       previousMillis = currentMillis;
 
       // Отправляем данные в формате JSON
       String sensorDataJson = getSensorDataJson();
-      if (client.publish("sensor/data/json", sensorDataJson.c_str())) {
+      if (client.publish("TEST/sensor/data/json", sensorDataJson.c_str())) {
         Serial.println("JSON data sent to MQTT: " + sensorDataJson);
       } else {
         Serial.println("Failed to send JSON data to MQTT.");
@@ -286,8 +343,9 @@ void loop() {
       publishWiFiInfo();
     }
   } else {
+    blinkLed(2);
     Serial.println("Lost connection to MQTT. Attempting to reconnect...");
-    setup(); // Переподключение к MQTT, если соединение потеряно
+    reconnectMQTT(); // Переподключение к MQTT, если соединение потеряно
   }
 
   if (mpu.testConnection()) {
@@ -345,13 +403,4 @@ void calibrateSensor() {
 
   mpu.PrintActiveOffsets();
   Serial.println("Calibration Done.");
-}
-
-void blinkLed(int count) {
-  for (int i = 0; i < count; i++) {
-    digitalWrite(ledPin, HIGH);
-    delay(100);
-    digitalWrite(ledPin, LOW);
-    delay(100);
-  }
 }
