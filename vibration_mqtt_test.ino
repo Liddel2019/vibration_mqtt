@@ -1,3 +1,4 @@
+// Version 1.1
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
