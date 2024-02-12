@@ -1,4 +1,4 @@
-// Version 1.1
+// Version 1.2
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
@@ -27,7 +27,16 @@ struct SensorData {
   long axMin, axMax, ayMin, ayMax, azMin, azMax, gxMin, gxMax, gyMin, gyMax, gzMin, gzMax;
   long axSum, aySum, azSum, gxSum, gySum, gzSum;
   long count;
-} sensorData;
+
+  // Конструктор для инициализации данных
+  SensorData() : axMin(INT16_MAX), axMax(INT16_MIN), ayMin(INT16_MAX), ayMax(INT16_MIN), 
+                 azMin(INT16_MAX), azMax(INT16_MIN), gxMin(INT16_MAX), gxMax(INT16_MIN), 
+                 gyMin(INT16_MAX), gyMax(INT16_MIN), gzMin(INT16_MAX), gzMax(INT16_MIN), 
+                 axSum(0), aySum(0), azSum(0), gxSum(0), gySum(0), gzSum(0), 
+                 count(0) {}
+};
+
+SensorData sensorData;
 
 void blinkLed(int count) {
   for (int i = 0; i < count; i++) {
@@ -39,9 +48,8 @@ void blinkLed(int count) {
 }
 
 void resetSensorData() {
-  sensorData = {INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN,
-                INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN, INT16_MAX, INT16_MIN,
-                0, 0, 0, 0, 0, 0, 0};
+  // Просто создаем новый экземпляр SensorData, который будет автоматически инициализирован
+  sensorData = SensorData();
 }
 
 void publishSensorData() {
@@ -80,7 +88,7 @@ void publishSensorData() {
   client.publish("TEST/sensor/Gz/diff", String(sensorData.gzMax - sensorData.gzMin).c_str());
 }
 
-int getSignalQuality(long rssi) {
+int getSignalQuality(int rssi) {
   int quality = 0;
   if (rssi <= -100) {
     quality = 0;
@@ -207,7 +215,7 @@ void connectToWiFi() {
   Serial.println(WiFi.localIP()); // Выводим IP-адрес устройства
 
   // Выводим дополнительную информацию о WiFi
-  long rssi = WiFi.RSSI(); // Получаем RSSI (Received Signal Strength Indication)
+  int rssi = WiFi.RSSI(); // Получаем RSSI (Received Signal Strength Indication)
   Serial.print("Signal Strength (RSSI): ");
   Serial.print(rssi);
   Serial.println(" dBm");
@@ -223,7 +231,7 @@ void publishWiFiInfo() {
     return;
   }
 
-  long rssi = WiFi.RSSI();
+  int rssi = WiFi.RSSI();
   int quality = getSignalQuality(rssi);
   String ip = WiFi.localIP().toString();
   String ssid = WiFi.SSID();
@@ -284,6 +292,26 @@ void reconnectMQTT() {
   }
 }
 
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+
+  String messageTemp;
+
+  for (int i = 0; i < length; i++) {
+    messageTemp += (char)payload[i];
+  }
+  Serial.println(messageTemp);
+
+  if (String(topic) == "TEST/command/calibrate") {
+    if (messageTemp == "start") {
+      Serial.println("Initiating calibration...");
+      calibrateSensor();
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   // Настройка WiFi
@@ -292,16 +320,17 @@ void setup() {
   connectToWiFi();
   // Настройка клиента MQTT
   client.setServer(mqttServer, mqttPort);
-  while (!client.connected()) {
-    Serial.println("Connecting to MQTT...");
-    if (client.connect("ESP32Client", mqttUser, mqttPassword )) {
-      Serial.println("Connected to MQTT");
-    } else {
-      Serial.print("MQTT connection failed, state: ");
-      Serial.println(client.state());
-      
+    client.setCallback(mqttCallback); // Установка функции-обработчика сообщений
+    while (!client.connected()) {
+      Serial.println("Connecting to MQTT...");
+      if (client.connect("ESP32Client", mqttUser, mqttPassword )) {
+        Serial.println("Connected to MQTT");
+        client.subscribe("TEST/command/calibrate"); // Подписка на топик команды калибровки
+      } else {
+        Serial.print("MQTT connection failed, state: ");
+        Serial.println(client.state());
+      }
     }
-  }
 
   pinMode(ledPin, OUTPUT);
   Wire.begin();
@@ -348,6 +377,7 @@ void loop() {
     Serial.println("Lost connection to MQTT. Attempting to reconnect...");
     reconnectMQTT(); // Переподключение к MQTT, если соединение потеряно
   }
+  client.loop();
 
   if (mpu.testConnection()) {
     int16_t ax, ay, az, gx, gy, gz;
