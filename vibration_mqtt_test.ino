@@ -1,4 +1,4 @@
-// Version 1.2
+// Version 1.3
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
@@ -16,6 +16,12 @@ const char* mqttPassword = "<Your MQTT Password Here>";
 unsigned long previousMillis = 0; // Хранит время последней отправки данных
 const long interval = 1250; // Интервал между отправками данных в миллисекундах (например, 2000 мс = 2 секунды)
 int connectionAttempts = 0;
+
+unsigned int pubSubClientBufferSize = 1024; // Начальный размер буфера
+
+bool bufferFull = false;
+unsigned long lastBufferStatusTime = 0;
+const unsigned long bufferStatusInterval = 1000; // Проверяем каждые 10 секунд
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -253,6 +259,11 @@ void publishWiFiInfo() {
   client.publish("TEST/wifi/MAC", mac.c_str());
 
   Serial.println("WiFi info sent to MQTT.");
+
+  if (!client.publish("topic", "message")) {
+  bufferFull = true;
+  client.publish("TEST/warning/PubSubClient_buffer_status", "buffer full");
+}
 }
 
 void reconnectWiFi() {
@@ -299,6 +310,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
   String messageTemp;
 
+  if (String(topic) == "TEST/command/setBufferSize") {
+    unsigned int newSize = messageTemp.toInt();
+    if (newSize > 0) {
+      setPubSubClientBufferSize(newSize);
+    } else {
+      Serial.println("Invalid buffer size received");
+    }
+  }
+
+
   for (int i = 0; i < length; i++) {
     messageTemp += (char)payload[i];
   }
@@ -310,6 +331,26 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       calibrateSensor();
     }
   }
+}
+
+void checkAndPublishBufferStatus() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastBufferStatusTime >= bufferStatusInterval) {
+    lastBufferStatusTime = currentMillis;
+    if (bufferFull) {
+      client.publish("TEST/warning/PubSubClient_buffer_status", "OK");
+      bufferFull = false;
+    }
+    // Отправляем среднее значение загрузки буфера (примерное, для демонстрации)
+    client.publish("TEST/warning/PubSubClient_buffer_raw", String(pubSubClientBufferSize / 2).c_str()); // Пример
+  }
+}
+
+void setPubSubClientBufferSize(unsigned int newSize) {
+  client.setBufferSize(newSize); 
+  pubSubClientBufferSize = newSize;
+  Serial.print("New PubSubClient buffer size: ");
+  Serial.println(newSize);
 }
 
 void setup() {
@@ -369,6 +410,8 @@ void loop() {
 
       // Отправляем разделенные данные для каждой подкатегории
       publishSensorData();
+
+      checkAndPublishBufferStatus();
 
       publishWiFiInfo();
     }
