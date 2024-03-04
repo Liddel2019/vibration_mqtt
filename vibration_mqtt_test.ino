@@ -5,15 +5,35 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
+
+#include "GyverEncoder.h"
+
+// ПИНы энкодера
+
+#define CLK 15
+#define DT 4
+#define SW 16
+
+Encoder enc1(CLK, DT, SW);
+
+#define DEBUG
+
+bool writeSD = true;
+
 // Инициализация переменных для WiFi и MQTT
-const char* ssid = "<Your SSID Here>";
-const char* password = "<Your WiFi Password Here>";
-const char* mqttServer = "<MQTT Server IP Address Here>";
-const int mqttPort = 1883; // Default MQTT port, adjust if necessary
-const char* mqttUser = "<Your MQTT Username Here>";
-const char* mqttPassword = "<Your MQTT Password Here>";
+const char* ssid = "ssid";
+const char* password = "password";
+
+const char* mqttServer = "mqttServer";
+const int mqttPort = 1883;
+const char* mqttUser = "mqttUser";
+const char* mqttPassword = "mqttPassword";
 
 unsigned long previousMillis = 0; // Хранит время последней отправки данных
+unsigned long previousMillis2 = 0; // Хранит время последней записи данных на SD
 const long interval = 1250; // Интервал между отправками данных в миллисекундах (например, 2000 мс = 2 секунды)
 int connectionAttempts = 0;
 
@@ -35,14 +55,114 @@ struct SensorData {
   long count;
 
   // Конструктор для инициализации данных
-  SensorData() : axMin(INT16_MAX), axMax(INT16_MIN), ayMin(INT16_MAX), ayMax(INT16_MIN), 
-                 azMin(INT16_MAX), azMax(INT16_MIN), gxMin(INT16_MAX), gxMax(INT16_MIN), 
-                 gyMin(INT16_MAX), gyMax(INT16_MIN), gzMin(INT16_MAX), gzMax(INT16_MIN), 
-                 axSum(0), aySum(0), azSum(0), gxSum(0), gySum(0), gzSum(0), 
-                 count(0) {}
+  SensorData() : axMin(INT16_MAX), axMax(INT16_MIN), ayMin(INT16_MAX), ayMax(INT16_MIN),
+    azMin(INT16_MAX), azMax(INT16_MIN), gxMin(INT16_MAX), gxMax(INT16_MIN),
+    gyMin(INT16_MAX), gyMax(INT16_MIN), gzMin(INT16_MAX), gzMax(INT16_MIN),
+    axSum(0), aySum(0), azSum(0), gxSum(0), gySum(0), gzSum(0),
+    count(0) {}
 };
 
 SensorData sensorData;
+
+////////////////////////////////////////////////////////////
+
+void initSD() {
+
+  if (!SD.begin(5)) {
+#ifdef DEBUG
+    Serial.println("Card Mount Failed");
+#endif
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+
+  if (cardType == CARD_NONE) {
+#ifdef DEBUG
+    Serial.println("No SD card attached");
+#endif
+    return;
+  }
+#ifdef DEBUG
+  Serial.print("SD Card Type: ");
+#endif
+
+  if (cardType == CARD_MMC) {
+#ifdef DEBUG
+    Serial.println("MMC");
+#endif
+  } else if (cardType == CARD_SD) {
+#ifdef DEBUG
+    Serial.println("SDSC");
+#endif
+  } else if (cardType == CARD_SDHC) {
+#ifdef DEBUG
+    Serial.println("SDHC");
+#endif
+  } else {
+#ifdef DEBUG
+    Serial.println("UNKNOWN");
+#endif
+  }
+
+#ifdef DEBUG
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+#endif
+
+}
+
+void writeFile(fs::FS &fs, const char * path, const char * message) {
+
+#ifdef DEBUG
+  Serial.printf("Writing file: %s\n", path);
+#endif
+
+  File file = fs.open(path, FILE_WRITE);
+  if (!file) {
+#ifdef DEBUG
+    Serial.println("Failed to open file for writing");
+#endif
+    return;
+  }
+  if (file.print(message)) {
+#ifdef DEBUG
+    Serial.println("File written");
+#endif
+  } else {
+#ifdef DEBUG
+    Serial.println("Write failed");
+#endif
+  }
+  file.close();
+}
+
+void appendFile(fs::FS &fs, const char * path, const char * message) {
+
+#ifdef DEBUG
+  Serial.printf("Appending to file: %s\n", path);
+#endif
+
+  File file = fs.open(path, FILE_APPEND);
+  if (!file) {
+#ifdef DEBUG
+    Serial.println("Failed to open file for appending");
+#endif
+    return;
+  }
+  if (file.print(message)) {
+#ifdef DEBUG
+    Serial.println("Message appended");
+#endif
+  } else {
+#ifdef DEBUG
+    Serial.println("Append failed");
+#endif
+  }
+  file.close();
+}
+
+
+////////////////////////////////////////////////////////////
 
 void blinkLed(int count) {
   for (int i = 0; i < count; i++) {
@@ -60,7 +180,7 @@ void resetSensorData() {
 
 void publishSensorData() {
   if (sensorData.count == 0) return; // Проверяем, есть ли данные для отправки
-  
+
   // Отправляем данные акселерометра и гироскопа в отдельные топики
   client.publish("TEST/sensor/Ax/min", String(sensorData.axMin).c_str());
   client.publish("TEST/sensor/Ax/max", String(sensorData.axMax).c_str());
@@ -108,14 +228,14 @@ int getSignalQuality(int rssi) {
 
 String getSensorDataJson() {
   StaticJsonDocument<512> doc; // Создайте JSON документ. Размер может быть адаптирован в зависимости от ваших нужд
-  
+
   if (sensorData.count == 0) {
     doc["error"] = "No data to calculate averages";
     String result;
     serializeJson(doc, result);
     return result;
   }
-  
+
   // Добавляем данные акселерометра и гироскопа в JSON документ
   doc["Ax"]["min"] = sensorData.axMin;
   doc["Ax"]["max"] = sensorData.axMax;
@@ -135,7 +255,7 @@ String getSensorDataJson() {
   doc["Gz"]["min"] = sensorData.gzMin;
   doc["Gz"]["max"] = sensorData.gzMax;
   doc["Gz"]["avg"] = sensorData.gzSum / sensorData.count;
-  
+
   String result;
   serializeJson(doc, result); // Сериализуем JSON документ в строку
   return result;
@@ -156,7 +276,7 @@ void updateSensorData(int16_t ax, int16_t ay, int16_t az, int16_t gx, int16_t gy
   sensorData.gyMax = max(sensorData.gyMax, (long)gy);
   sensorData.gzMin = min(sensorData.gzMin, (long)gz);
   sensorData.gzMax = max(sensorData.gzMax, (long)gz);
-  
+
   sensorData.axSum += ax;
   sensorData.aySum += ay;
   sensorData.azSum += az;
@@ -179,7 +299,7 @@ String getSensorDataString() {
 }
 
 void setAccelRange(int range) {
-  switch(range) {
+  switch (range) {
     case 16:
       mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_16);
       Serial.println("Accel range set to ±16g");
@@ -261,9 +381,9 @@ void publishWiFiInfo() {
   Serial.println("WiFi info sent to MQTT.");
 
   if (!client.publish("topic", "message")) {
-  bufferFull = true;
-  client.publish("TEST/warning/PubSubClient_buffer_status", "buffer full");
-}
+    bufferFull = true;
+    client.publish("TEST/warning/PubSubClient_buffer_status", "buffer full");
+  }
 }
 
 void reconnectWiFi() {
@@ -300,6 +420,8 @@ void reconnectMQTT() {
       Serial.println(client.state());
       // Можно добавить задержку перед следующей попыткой
     }
+
+
   }
 }
 
@@ -347,7 +469,7 @@ void checkAndPublishBufferStatus() {
 }
 
 void setPubSubClientBufferSize(unsigned int newSize) {
-  client.setBufferSize(newSize); 
+  client.setBufferSize(newSize);
   pubSubClientBufferSize = newSize;
   Serial.print("New PubSubClient buffer size: ");
   Serial.println(newSize);
@@ -355,23 +477,34 @@ void setPubSubClientBufferSize(unsigned int newSize) {
 
 void setup() {
   Serial.begin(115200);
+
+  initSD();
+
   // Настройка WiFi
   setAccelRange(2); //2,4,8,16
   blinkLed(3);
   connectToWiFi();
   // Настройка клиента MQTT
+
+  int iMQTT = 10;
+
   client.setServer(mqttServer, mqttPort);
-    client.setCallback(mqttCallback); // Установка функции-обработчика сообщений
-    while (!client.connected()) {
-      Serial.println("Connecting to MQTT...");
-      if (client.connect("ESP32Client", mqttUser, mqttPassword )) {
-        Serial.println("Connected to MQTT");
-        client.subscribe("TEST/command/calibrate"); // Подписка на топик команды калибровки
-      } else {
-        Serial.print("MQTT connection failed, state: ");
-        Serial.println(client.state());
-      }
+  client.setCallback(mqttCallback); // Установка функции-обработчика сообщений
+  while (!client.connected()) {
+    Serial.println("Connecting to MQTT...");
+    if (client.connect("ESP32Client", mqttUser, mqttPassword )) {
+      Serial.println("Connected to MQTT");
+      client.subscribe("TEST/command/calibrate"); // Подписка на топик команды калибровки
+    } else {
+      Serial.print("MQTT connection failed, state: ");
+      Serial.println(client.state());
     }
+
+    iMQTT--;
+    if (iMQTT == 0) {
+      break;
+    }
+  }
 
   pinMode(ledPin, OUTPUT);
   Wire.begin();
@@ -385,23 +518,61 @@ void setup() {
   mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_16);
 
   // Calibrate sensor
-  calibrateSensor();
+  //calibrateSensor();
 
   resetSensorData();
+
+  enc1.setType(TYPE2);
+
   blinkLed(10);
+
+
+
 }
 
 void loop() {
-   
-   reconnectWiFi(); 
 
-   unsigned long currentMillis = millis();
+  enc1.tick();
+  if (enc1.isSingle()) {
+    writeSD = !writeSD;
+#ifdef DEBUG
+    Serial.println("Encoder pressed");
+#endif
+  }
+
+  reconnectWiFi();
+
+  unsigned long currentMillis = millis();
+  unsigned long currentMillis2 = millis();
+
+  if (writeSD) {
+
+    if (currentMillis2 - previousMillis2 >= interval) {
+
+      previousMillis2 = currentMillis2;
+
+      String stSD = "";
+      stSD = getSensorDataString();
+      stSD = ": " + stSD + " \n";
+      stSD = String(millis()) + stSD;
+
+      appendFile(SD, "/data.txt", stSD.c_str());
+      digitalWrite(ledPin, LOW);
+
+    }
+  } else {
+    digitalWrite(ledPin, HIGH);
+  }
+
+
   if (client.connected()) {
     if (currentMillis - previousMillis >= interval) {
       previousMillis = currentMillis;
 
       // Отправляем данные в формате JSON
       String sensorDataJson = getSensorDataJson();
+
+
       if (client.publish("TEST/sensor/data/json", sensorDataJson.c_str())) {
         Serial.println("JSON data sent to MQTT: " + sensorDataJson);
       } else {
@@ -433,8 +604,10 @@ void loop() {
       resetSensorData();
     }
   } else {
-    Serial.println("MPU6050 connection failed");
+    //Serial.println("MPU6050 connection failed");
   }
+
+
 }
 
 void calibrateSensor() {
@@ -458,7 +631,7 @@ void calibrateSensor() {
       long currentAccelOffset = mpu.getXAccelOffset() + mpu.getYAccelOffset() + mpu.getZAccelOffset();
       long currentGyroOffset = mpu.getXGyroOffset() + mpu.getYGyroOffset() + mpu.getZGyroOffset();
 
-      if (abs(currentAccelOffset - prevAccelOffset[i]) > stabilityThreshold || 
+      if (abs(currentAccelOffset - prevAccelOffset[i]) > stabilityThreshold ||
           abs(currentGyroOffset - prevGyroOffset[i]) > stabilityThreshold) {
         isStable = false;
       }
