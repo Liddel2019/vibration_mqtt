@@ -1,4 +1,4 @@
-// Version 1.3
+// Version 1.4
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
@@ -22,6 +22,7 @@ Encoder enc1(CLK, DT, SW);
 #define DEBUG
 
 bool writeSD = true;
+bool networkON = true;
 
 // Инициализация переменных для WiFi и MQTT
 const char* ssid = "ssid";
@@ -36,6 +37,7 @@ unsigned long previousMillis = 0; // Хранит время последней 
 unsigned long previousMillis2 = 0; // Хранит время последней записи данных на SD
 const long interval = 1250; // Интервал между отправками данных в миллисекундах (например, 2000 мс = 2 секунды)
 int connectionAttempts = 0;
+int maxAttempts = 5;
 
 unsigned int pubSubClientBufferSize = 1024; // Начальный размер буфера
 
@@ -69,10 +71,24 @@ SensorData sensorData;
 void initSD() {
 
   if (!SD.begin(5)) {
+
+    if (networkON && client.connected()) {
+      client.publish("TEST/SD_CARD/error/CardMountFailed", "1");
+    }
+
 #ifdef DEBUG
     Serial.println("Card Mount Failed");
 #endif
-    return;
+  
+  } else {
+
+    if (networkON && client.connected()) {
+      client.publish("TEST/SD_CARD/error/CardMountFailed", "0");
+    }
+#ifdef DEBUG
+    Serial.println("Card Mounted");
+#endif
+
   }
   uint8_t cardType = SD.cardType();
 
@@ -80,7 +96,7 @@ void initSD() {
 #ifdef DEBUG
     Serial.println("No SD card attached");
 #endif
-    return;
+   
   }
 #ifdef DEBUG
   Serial.print("SD Card Type: ");
@@ -104,36 +120,23 @@ void initSD() {
 #endif
   }
 
+  if (networkON && client.connected()) {
+    client.publish("TEST/SD_CARD/info/cardType", String(cardType).c_str());
+  }
+  
+  unsigned long cardSize = SD.cardSize() / (1024 * 1024);
+
+  unsigned long freeSize = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+  
+  if (networkON && client.connected()) {
+    client.publish("TEST/SD_CARD/info/cardSize", String(cardSize).c_str());
+    client.publish("TEST/SD_CARD/info/freeSize", String(freeSize).c_str());    
+  }
+  
 #ifdef DEBUG
-  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
   Serial.printf("SD Card Size: %lluMB\n", cardSize);
 #endif
 
-}
-
-void writeFile(fs::FS &fs, const char * path, const char * message) {
-
-#ifdef DEBUG
-  Serial.printf("Writing file: %s\n", path);
-#endif
-
-  File file = fs.open(path, FILE_WRITE);
-  if (!file) {
-#ifdef DEBUG
-    Serial.println("Failed to open file for writing");
-#endif
-    return;
-  }
-  if (file.print(message)) {
-#ifdef DEBUG
-    Serial.println("File written");
-#endif
-  } else {
-#ifdef DEBUG
-    Serial.println("Write failed");
-#endif
-  }
-  file.close();
 }
 
 void appendFile(fs::FS &fs, const char * path, const char * message) {
@@ -144,19 +147,46 @@ void appendFile(fs::FS &fs, const char * path, const char * message) {
 
   File file = fs.open(path, FILE_APPEND);
   if (!file) {
+
+    if (networkON && client.connected()) {
+      client.publish("TEST/SD_CARD/error/OpenError", "1");
+    }
+
 #ifdef DEBUG
     Serial.println("Failed to open file for appending");
 #endif
     return;
+  } else {
+
+    if (networkON && client.connected()) {
+      client.publish("TEST/SD_CARD/error/OpenError", "0");
+    }
   }
+
   if (file.print(message)) {
+    if (networkON && client.connected()) {
+      client.publish("TEST/SD_CARD/error/WriteError", "0");
+      
+    }
 #ifdef DEBUG
     Serial.println("Message appended");
 #endif
   } else {
+
+    if (networkON && client.connected()) {
+      client.publish("TEST/SD_CARD/error/WriteError", "1");
+    }
+    
 #ifdef DEBUG
     Serial.println("Append failed");
 #endif
+
+  }
+
+   unsigned long freeSize = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+  
+  if (networkON && client.connected()) {
+    client.publish("TEST/SD_CARD/info/freeSize", String(freeSize).c_str());    
   }
   file.close();
 }
@@ -323,32 +353,34 @@ void setAccelRange(int range) {
 }
 
 void connectToWiFi() {
-  Serial.println("Connecting to WiFi...");
-  WiFi.begin(ssid, password); // Начинаем подключение к WiFi
+  if (networkON) {
+    Serial.println("Connecting to WiFi...");
+    WiFi.begin(ssid, password); // Начинаем подключение к WiFi
 
-  while (WiFi.status() != WL_CONNECTED) { // Проверяем, подключились ли мы к WiFi
-    delay(500);
-    Serial.print(".");
-    connectionAttempts++; // Увеличиваем счетчик попыток подключения
-    if (connectionAttempts > 20) { // Если попыток слишком много, делаем перезагрузку
-      Serial.println("Failed to connect to WiFi. Please check your credentials");
-      ESP.restart(); // Перезагружаем устройство
+    while (WiFi.status() != WL_CONNECTED && connectionAttempts < maxAttempts) { // Проверяем, подключились ли мы к WiFi
+      delay(500);
+      Serial.print(".");
+      connectionAttempts++; // Увеличиваем счетчик попыток подключения
+      if (connectionAttempts > maxAttempts - 2) { // Если попыток слишком много, делаем перезагрузку
+        Serial.println("Failed to connect to WiFi. Please check your credentials");
+        //ESP.restart(); // Перезагружаем устройство
+      }
     }
+
+    Serial.println("\nConnected to WiFi");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP()); // Выводим IP-адрес устройства
+
+    // Выводим дополнительную информацию о WiFi
+    int rssi = WiFi.RSSI(); // Получаем RSSI (Received Signal Strength Indication)
+    Serial.print("Signal Strength (RSSI): ");
+    Serial.print(rssi);
+    Serial.println(" dBm");
+    int quality = getSignalQuality(rssi); // Преобразуем RSSI в качество сигнала
+    Serial.print("Signal Quality: ");
+    Serial.print(quality);
+    Serial.println("%");
   }
-
-  Serial.println("\nConnected to WiFi");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP()); // Выводим IP-адрес устройства
-
-  // Выводим дополнительную информацию о WiFi
-  int rssi = WiFi.RSSI(); // Получаем RSSI (Received Signal Strength Indication)
-  Serial.print("Signal Strength (RSSI): ");
-  Serial.print(rssi);
-  Serial.println(" dBm");
-  int quality = getSignalQuality(rssi); // Преобразуем RSSI в качество сигнала
-  Serial.print("Signal Quality: ");
-  Serial.print(quality);
-  Serial.println("%");
 }
 
 void publishWiFiInfo() {
@@ -387,45 +419,49 @@ void publishWiFiInfo() {
 }
 
 void reconnectWiFi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected. Attempting to reconnect...");
-    WiFi.disconnect();
-    WiFi.reconnect();
-    connectionAttempts = 0; // Сброс счетчика попыток подключения
-    while (WiFi.status() != WL_CONNECTED && connectionAttempts < 20) {
-      delay(500);
-      Serial.print(".");
-      connectionAttempts++;
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nReconnected to WiFi");
-      Serial.print("IP Address: ");
-      Serial.println(WiFi.localIP());
-    } else {
-      Serial.println("\nFailed to reconnect to WiFi. Check your credentials or WiFi signal");
+  if (networkON) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi disconnected. Attempting to reconnect...");
+      WiFi.disconnect();
+      WiFi.reconnect();
+      connectionAttempts = 0; // Сброс счетчика попыток подключения
+      while (WiFi.status() != WL_CONNECTED && connectionAttempts < maxAttempts) {
+        delay(500);
+        Serial.print(".");
+        connectionAttempts++;
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nReconnected to WiFi");
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+      } else {
+        Serial.println("\nFailed to reconnect to WiFi. Check your credentials or WiFi signal");
+      }
     }
   }
 }
 
 void reconnectMQTT() {
-  // Проверяем, подключены ли мы к MQTT
-  if (!client.connected()) {
-    Serial.println("Attempting MQTT reconnection...");
-    // Пытаемся подключиться
-    if (client.connect("ESP32Client", mqttUser, mqttPassword)) {
-      Serial.println("Reconnected to MQTT");
-      // Здесь можно также повторно подписаться на нужные топики
-    } else {
-      Serial.print("Failed to reconnect to MQTT, state: ");
-      Serial.println(client.state());
-      // Можно добавить задержку перед следующей попыткой
+  if (networkON) {
+    // Проверяем, подключены ли мы к MQTT
+    if (!client.connected()) {
+      Serial.println("Attempting MQTT reconnection...");
+      // Пытаемся подключиться
+      if (client.connect("ESP32Client", mqttUser, mqttPassword)) {
+        Serial.println("Reconnected to MQTT");
+        // Здесь можно также повторно подписаться на нужные топики
+      } else {
+        Serial.print("Failed to reconnect to MQTT, state: ");
+        Serial.println(client.state());
+        // Можно добавить задержку перед следующей попыткой
+      }
+
+
     }
-
-
   }
 }
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char* topic, byte * payload, unsigned int length) {
   Serial.print("Message arrived on topic: ");
   Serial.print(topic);
   Serial.print(". Message: ");
@@ -475,10 +511,59 @@ void setPubSubClientBufferSize(unsigned int newSize) {
   Serial.println(newSize);
 }
 
+
+void publishSDCARDinfo() {
+
+  client.publish("TEST/SD_CARD/info/active", writeSD == true ? "1" : "0");
+
+}
+
+
+
+////////////////////////////////////////////
+void encoderTask( void* arg ) {
+
+  while (true) {
+
+
+    enc1.tick();
+
+    //=================================== Одинарное нажатие
+    if (enc1.isSingle()) {
+      writeSD = !writeSD;
+#ifdef DEBUG
+      Serial.println("Encoder pressed");
+#endif
+    }
+
+
+    //=================================== Двойное нажатие
+
+    if (enc1.isDouble()) {
+
+      networkON = !networkON;
+
+
+#ifdef DEBUG
+      Serial.println("Encoder double pressed");
+
+      if (networkON) {
+        Serial.println("networkON TRUE");
+      } else {
+        Serial.println("networkON FALSE");
+      }
+#endif
+    }
+
+  }
+
+}
+
+////////////////////////////////////////////
+
 void setup() {
   Serial.begin(115200);
 
-  initSD();
 
   // Настройка WiFi
   setAccelRange(2); //2,4,8,16
@@ -526,21 +611,23 @@ void setup() {
 
   blinkLed(10);
 
+  reconnectTime = millis();
 
+  xTaskCreateUniversal(encoderTask, "encoder", 1024 * 16,  NULL, 1, NULL, 1);
 
+  initSD();
 }
 
 void loop() {
 
-  enc1.tick();
-  if (enc1.isSingle()) {
-    writeSD = !writeSD;
-#ifdef DEBUG
-    Serial.println("Encoder pressed");
-#endif
-  }
 
-  reconnectWiFi();
+  if (millis() - reconnectTime > 5000)  {
+    reconnectTime = millis();
+    if (networkON) {
+      reconnectWiFi();
+    }
+
+  }
 
   unsigned long currentMillis = millis();
   unsigned long currentMillis2 = millis();
@@ -564,35 +651,37 @@ void loop() {
     digitalWrite(ledPin, HIGH);
   }
 
+  if (networkON) {
+    if (client.connected()) {
+      if (currentMillis - previousMillis >= interval) {
+        previousMillis = currentMillis;
 
-  if (client.connected()) {
-    if (currentMillis - previousMillis >= interval) {
-      previousMillis = currentMillis;
+        // Отправляем данные в формате JSON
+        String sensorDataJson = getSensorDataJson();
 
-      // Отправляем данные в формате JSON
-      String sensorDataJson = getSensorDataJson();
+        if (client.publish("TEST/sensor/data/json", sensorDataJson.c_str())) {
+          Serial.println("JSON data sent to MQTT: " + sensorDataJson);
+        } else {
+          Serial.println("Failed to send JSON data to MQTT.");
+        }
 
+        // Отправляем разделенные данные для каждой подкатегории
 
-      if (client.publish("TEST/sensor/data/json", sensorDataJson.c_str())) {
-        Serial.println("JSON data sent to MQTT: " + sensorDataJson);
-      } else {
-        Serial.println("Failed to send JSON data to MQTT.");
+        publishSDCARDinfo();
+
+        publishSensorData();
+
+        checkAndPublishBufferStatus();
+
+        publishWiFiInfo();
       }
-
-      // Отправляем разделенные данные для каждой подкатегории
-      publishSensorData();
-
-      checkAndPublishBufferStatus();
-
-      publishWiFiInfo();
+    } else {
+      blinkLed(2);
+      Serial.println("Lost connection to MQTT. Attempting to reconnect...");
+      reconnectMQTT(); // Переподключение к MQTT, если соединение потеряно
     }
-  } else {
-    blinkLed(2);
-    Serial.println("Lost connection to MQTT. Attempting to reconnect...");
-    reconnectMQTT(); // Переподключение к MQTT, если соединение потеряно
+    client.loop();
   }
-  client.loop();
-
   if (mpu.testConnection()) {
     int16_t ax, ay, az, gx, gy, gz;
     mpu.getAcceleration(&ax, &ay, &az);
