@@ -28,14 +28,14 @@ bool writeSD = true;
 bool networkON = true;
 
 // Инициализация переменных для WiFi и MQTT
-const char* ssid = "Roman 2.4";
-const char* password = "9099011494";
+const char* ssid = "ssid";
+const char* password = "password";
 unsigned long reconnectTime = 0;
 
-const char* mqttServer = "80.249.149.17";
+const char* mqttServer = "mqttServer";
 const int mqttPort = 1883;
-const char* mqttUser = "mqttuser";
-const char* mqttPassword = "11111111";
+const char* mqttUser = "mqttUser";
+const char* mqttPassword = "mqttPassword";
 
 unsigned long previousMillis = 0; // Хранит время последней отправки данных
 unsigned long previousMillis2 = 0; // Хранит время последней записи данных на SD
