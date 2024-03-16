@@ -1,4 +1,4 @@
-// Version 1.5
+// Version 1.6
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
@@ -26,6 +26,14 @@ iarduino_RTC watch(RTC_DS1302, 27, 13, 12);
 
 bool writeSD = true;
 bool networkON = true;
+
+
+
+unsigned int backupCount = 15;     // Количество бекапов
+unsigned long backupPeriod = 7;    // Период создания бекапа в секундах
+
+unsigned long lastBackup = 0;
+unsigned int currentNum = 0;
 
 // Инициализация переменных для WiFi и MQTT
 const char* ssid = "ssid";
@@ -71,6 +79,71 @@ struct SensorData {
 SensorData sensorData;
 
 ////////////////////////////////////////////////////////////
+
+int doBackup() {
+  
+  File sourceFile;
+  File turgetFile;
+
+  if ((millis() - lastBackup) >= backupPeriod * 1000) {
+
+    lastBackup = millis();
+
+    currentNum = 0;
+    for (int i = 1; i < backupCount; i++) {
+
+      if (SD.exists("/backup_" + String(i) + ".txt")) {
+        Serial.println("backup_" + String(i) + ".txt - найден.");
+      } else {
+        Serial.println("backup_" + String(i) + ".txt - не найден.");
+        currentNum = i;
+        break;
+      }
+    }
+
+    if (currentNum == 0) {
+      currentNum = 1;
+    }
+
+    String path = "/backup_" + String(currentNum) + ".txt";
+    turgetFile = SD.open(path, FILE_APPEND);
+
+    if (currentNum > 1) { // копируем предыдущий бэкап
+
+      String path = "/backup_" + String(currentNum - 1) + ".txt";
+      sourceFile = SD.open(path, FILE_READ);
+
+      while (sourceFile.available()) {
+
+        byte fileData = sourceFile.read();
+        //Serial.write(fileData);
+        turgetFile.write(fileData);
+
+      }
+
+      sourceFile.close();
+
+    }
+
+    sourceFile = SD.open("/data.txt", FILE_READ);
+
+    while (sourceFile.available()) {
+
+      byte fileData = sourceFile.read();
+      Serial.write(fileData);
+      turgetFile.write(fileData);
+
+    }
+
+    sourceFile.close();
+    turgetFile.close();
+
+    Serial.println("");
+    SD.remove("/data.txt");
+    Serial.println("Backup... done!");
+
+  }
+}
 
 void initSD() {
 
@@ -631,12 +704,12 @@ void setup() {
 void loop() {
 
   String hh, mm, ss;
-  String yy, mm1, dd;  
+  String yy, mm1, dd;
 
   if (millis() % 1000 == 0) {
     Serial.println(watch.gettime("d.m.Y H:i:s"));
-    
-    delay(1);                                            
+
+    delay(1);
   }
 
   if (millis() - reconnectTime > 5000)  {
@@ -673,7 +746,7 @@ void loop() {
       Serial.println(mm1);
       Serial.println(dd);
 
-      watch.settime(watch.seconds,watch.minutes,watch.Hours,dd.toInt(), mm1.toInt(), yy.toInt());
+      watch.settime(watch.seconds, watch.minutes, watch.Hours, dd.toInt(), mm1.toInt(), yy.toInt());
 
     }
 
@@ -696,9 +769,12 @@ void loop() {
       stSD = /*String(millis()) + */stSD;
 
       appendFile(SD, "/data.txt", (watch.gettime("d.m.Y H:i:s") +  stSD).c_str());
+
+
       digitalWrite(ledPin, LOW);
 
     }
+    doBackup();
   } else {
     digitalWrite(ledPin, HIGH);
   }
@@ -720,7 +796,7 @@ void loop() {
         int res_p = client.state();
         Serial.print("MQTT clietn state: ");
         Serial.println(res_p);
-        
+
 
         // Отправляем разделенные данные для каждой подкатегории
 
