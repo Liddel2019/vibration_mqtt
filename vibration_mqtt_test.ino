@@ -1,9 +1,10 @@
-// Version 1.4
+// Version 1.5
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <iarduino_RTC.h>
 
 #include "FS.h"
 #include "SD.h"
@@ -19,19 +20,22 @@
 
 Encoder enc1(CLK, DT, SW);
 
+iarduino_RTC watch(RTC_DS1302, 27, 13, 12);
+
 #define DEBUG
 
 bool writeSD = true;
 bool networkON = true;
 
 // Инициализация переменных для WiFi и MQTT
-const char* ssid = "ssid";
-const char* password = "password";
+const char* ssid = "Roman 2.4";
+const char* password = "9099011494";
+unsigned long reconnectTime = 0;
 
-const char* mqttServer = "mqttServer";
+const char* mqttServer = "80.249.149.17";
 const int mqttPort = 1883;
-const char* mqttUser = "mqttUser";
-const char* mqttPassword = "mqttPassword";
+const char* mqttUser = "mqttuser";
+const char* mqttPassword = "11111111";
 
 unsigned long previousMillis = 0; // Хранит время последней отправки данных
 unsigned long previousMillis2 = 0; // Хранит время последней записи данных на SD
@@ -79,7 +83,7 @@ void initSD() {
 #ifdef DEBUG
     Serial.println("Card Mount Failed");
 #endif
-  
+
   } else {
 
     if (networkON && client.connected()) {
@@ -96,7 +100,7 @@ void initSD() {
 #ifdef DEBUG
     Serial.println("No SD card attached");
 #endif
-   
+
   }
 #ifdef DEBUG
   Serial.print("SD Card Type: ");
@@ -123,16 +127,16 @@ void initSD() {
   if (networkON && client.connected()) {
     client.publish("TEST/SD_CARD/info/cardType", String(cardType).c_str());
   }
-  
+
   unsigned long cardSize = SD.cardSize() / (1024 * 1024);
 
   unsigned long freeSize = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
-  
+
   if (networkON && client.connected()) {
     client.publish("TEST/SD_CARD/info/cardSize", String(cardSize).c_str());
-    client.publish("TEST/SD_CARD/info/freeSize", String(freeSize).c_str());    
+    client.publish("TEST/SD_CARD/info/freeSize", String(freeSize).c_str());
   }
-  
+
 #ifdef DEBUG
   Serial.printf("SD Card Size: %lluMB\n", cardSize);
 #endif
@@ -166,7 +170,7 @@ void appendFile(fs::FS &fs, const char * path, const char * message) {
   if (file.print(message)) {
     if (networkON && client.connected()) {
       client.publish("TEST/SD_CARD/error/WriteError", "0");
-      
+
     }
 #ifdef DEBUG
     Serial.println("Message appended");
@@ -176,17 +180,17 @@ void appendFile(fs::FS &fs, const char * path, const char * message) {
     if (networkON && client.connected()) {
       client.publish("TEST/SD_CARD/error/WriteError", "1");
     }
-    
+
 #ifdef DEBUG
     Serial.println("Append failed");
 #endif
 
   }
 
-   unsigned long freeSize = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
-  
+  unsigned long freeSize = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+
   if (networkON && client.connected()) {
-    client.publish("TEST/SD_CARD/info/freeSize", String(freeSize).c_str());    
+    client.publish("TEST/SD_CARD/info/freeSize", String(freeSize).c_str());
   }
   file.close();
 }
@@ -531,6 +535,10 @@ void encoderTask( void* arg ) {
     //=================================== Одинарное нажатие
     if (enc1.isSingle()) {
       writeSD = !writeSD;
+      if (writeSD) {
+        SD.end();
+        initSD();
+      }
 #ifdef DEBUG
       Serial.println("Encoder pressed");
 #endif
@@ -563,6 +571,8 @@ void encoderTask( void* arg ) {
 
 void setup() {
   Serial.begin(115200);
+
+  watch.begin();
 
 
   // Настройка WiFi
@@ -620,6 +630,14 @@ void setup() {
 
 void loop() {
 
+  String hh, mm, ss;
+  String yy, mm1, dd;  
+
+  if (millis() % 1000 == 0) {
+    Serial.println(watch.gettime("d.m.Y H:i:s"));
+    
+    delay(1);                                            
+  }
 
   if (millis() - reconnectTime > 5000)  {
     reconnectTime = millis();
@@ -628,6 +646,40 @@ void loop() {
     }
 
   }
+
+  if (Serial.available()) {
+
+    String comCmd = Serial.readStringUntil(' ');
+
+    if (comCmd.startsWith("time=")) {
+
+      comCmd = comCmd.substring(5);
+      hh = comCmd.substring(0, 2);
+      mm = comCmd.substring(3, 5);
+      ss = comCmd.substring(6);
+      Serial.println(hh);
+      Serial.println(mm);
+      Serial.println(ss);
+
+      watch.settime(ss.toInt(), mm.toInt(), hh.toInt());
+
+    } else    if (comCmd.startsWith("date=")) {
+
+      comCmd = comCmd.substring(5);
+      dd = comCmd.substring(0, 2);
+      mm1 = comCmd.substring(3, 5);
+      yy = comCmd.substring(8);
+      Serial.println(yy);
+      Serial.println(mm1);
+      Serial.println(dd);
+
+      watch.settime(watch.seconds,watch.minutes,watch.Hours,dd.toInt(), mm1.toInt(), yy.toInt());
+
+    }
+
+  }
+
+
 
   unsigned long currentMillis = millis();
   unsigned long currentMillis2 = millis();
@@ -641,9 +693,9 @@ void loop() {
       String stSD = "";
       stSD = getSensorDataString();
       stSD = ": " + stSD + " \n";
-      stSD = String(millis()) + stSD;
+      stSD = /*String(millis()) + */stSD;
 
-      appendFile(SD, "/data.txt", stSD.c_str());
+      appendFile(SD, "/data.txt", (watch.gettime("d.m.Y H:i:s") +  stSD).c_str());
       digitalWrite(ledPin, LOW);
 
     }
@@ -664,6 +716,11 @@ void loop() {
         } else {
           Serial.println("Failed to send JSON data to MQTT.");
         }
+
+        int res_p = client.state();
+        Serial.print("MQTT clietn state: ");
+        Serial.println(res_p);
+        
 
         // Отправляем разделенные данные для каждой подкатегории
 
